@@ -1,0 +1,6 @@
+.env
+.spotify_cache
+browser.json
+__pycache__/
+.vscode/
+*.pyc
