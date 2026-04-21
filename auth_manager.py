@@ -1230,7 +1230,6 @@ class AuthManager:
         )
         self._last_results: list[PreFlightResult] = []
         self._reload_task:  Optional[asyncio.Task] = None  # tracked for hard_cleanup
-        self._oauth_task:   Optional[asyncio.Task] = None
 
     # ── Spotify OAuth ──────────────────────────────────────────────────
 
@@ -1365,8 +1364,10 @@ class AuthManager:
         """
         Parallel pre-flight + conditional service init.
 
-        If Spotify has no cached token, starts the OAuth flow automatically
-        after a short delay (to allow the UI to render first).
+        Spotify: if there is no valid cached token, the state is marked as
+        "requires authentication" but the browser is NOT opened automatically.
+        The user must click "Conectar con Spotify" in the wizard to start the
+        OAuth flow.
         Other expired platforms open the wizard on their respective tab.
         """
         self.state_log_fn("[INFO] Pre-flight: verificando credenciales…")
@@ -1374,7 +1375,6 @@ class AuthManager:
         self._last_results = results
         self._sync_auth_ui_state(results)
 
-        needs_oauth    = False
         need_wizard_for: list[str] = []
 
         for r in results:
@@ -1382,9 +1382,11 @@ class AuthManager:
                 self.state_log_fn(f"[INFO]  ✓ {r.platform}: OK")
             elif r.expired:
                 if r.platform == "Spotify" and r.code == AuthFailureCode.SPOTIFY_EXPIRED:
-                    needs_oauth = True
+                    # Lazy auth: do NOT open the browser automatically.
+                    # Just log so the status icon shows "Desconectado".
                     self.state_log_fn(
-                        "[INFO]  ↳ Spotify: sin token — iniciando flujo OAuth"
+                        "[INFO]  ↳ Spotify: sin token cacheado — "
+                        "usa el Wizard → Spotify → «Conectar con Spotify» para autenticarte."
                     )
                 else:
                     need_wizard_for.append(r.platform)
@@ -1397,19 +1399,7 @@ class AuthManager:
 
         await self._init_passing_services(results)
 
-        if needs_oauth:
-            async def _deferred_oauth() -> None:
-                await asyncio.sleep(random.uniform(1.5, 2.5))
-                ok = await self.start_spotify_oauth_flow()
-                chk = await self.check_all_sessions()
-                self.ingest_preflight_results(chk)
-                if not ok:
-                    await asyncio.sleep(0.5)
-                    self.open_wizard("Spotify")
-
-            self._oauth_task = asyncio.create_task(_deferred_oauth())
-
-        elif need_wizard_for:
+        if need_wizard_for:
             # Open wizard on the first failing non-Spotify platform
             first_fail = need_wizard_for[0]
 

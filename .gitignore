@@ -1,6 +1,14 @@
+# Entorno de desarrollo
+.vscode/
+
+# Archivos de sistema y Python
+__pycache__/
+
+# Secretos y Configuración (CRÍTICO)
 .env
 .spotify_cache
 browser.json
-__pycache__/
-.vscode/
-*.pyc
+
+# Logs y temporales
+*.log
+.DS_Store
