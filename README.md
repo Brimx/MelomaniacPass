@@ -244,20 +244,3 @@ services/api_service  →   add_to_playlist(track_id)  ← si match válido
 core/state.py         →   TransferState actualizado → notify()
 ui/main_ui.py         → actualiza progreso en tiempo real
 ```
-
----
-
-## Métricas de Refactorización
-
-| | Antes | Después |
-|---|---|---|
-| Archivos | 1 monolito | 15 módulos |
-| Líneas entry point | ~5000 | ~60 |
-| Tamaño entry point | 218 KB | 6 KB |
-| Errores de diagnóstico | — | 0 |
-
----
-
-## Respaldo
-
-El monolito original está en `v. 0.1/refactor_backup/app.py` (218 KB).
