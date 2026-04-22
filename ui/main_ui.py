@@ -842,8 +842,7 @@ class PlaylistManagerUI:
                             behavior=ft.SnackBarBehavior.FLOATING, width=440,
                             show_close_icon=True, close_icon_color=ACCENT,
                         )
-                        self.page.overlay.append(_snack)
-                        _snack.open = True
+                        self.page.show_dialog(_snack)
                 elif s.transfer_state == TransferState.ERROR:
                     self._content_prog_label.value = f"{porcentaje}%  ·  error · {fallidas + rechazadas} incidencias"
                     self._content_prog_label.color = WARNING
@@ -1139,6 +1138,4 @@ class PlaylistManagerUI:
             duration=3000, behavior=ft.SnackBarBehavior.FLOATING,
             width=380, show_close_icon=True, close_icon_color=ACCENT,
         )
-        self.page.overlay.append(snack)
-        snack.open = True
-        self.page.update()
+        self.page.show_dialog(snack)

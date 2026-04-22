@@ -241,9 +241,7 @@ class TelemetryDrawer:
     def _snack(self, msg: str) -> None:
         s = ft.SnackBar(content=ft.Text(msg, font_family="IBM Plex Sans", size=12, opacity=1.0),
                         bgcolor=BG_PANEL, duration=3500)
-        self.page.overlay.append(s)
-        s.open = True
-        self.page.update()
+        self.page.show_dialog(s)
 
     def _do_export(self) -> None:
         import datetime as _dt
