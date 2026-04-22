@@ -164,10 +164,12 @@ with open(BROWSER_JSON, 'r') as f:
 **Spotify (OAuth 2.0 Authorization Code Flow):**
 ```
 .env (CLIENT_ID, CLIENT_SECRET)
+    → App arranca sin bloquear la UI (Lazy Auth)
+    → Usuario hace clic en "Conectar" en el Config Wizard
     → auth_manager abre navegador
     → servidor HTTP local en :8080 captura el callback
     → intercambia code por access_token
-    → token guardado en cache_handler.py
+    → token guardado en .spotify_cache (vía cache_handler)
     → services/api_service.py lo usa en cada request
 ```
 
@@ -194,8 +196,9 @@ Usuario obtiene tokens desde Apple Music Web
 ### Inicialización en `app.py`
 
 ```python
-service      = MusicApiService({})
-state        = AppState(service)        # crea circuit breakers internamente
+circuit_breakers = {p: CircuitBreaker(p) for p in AppState.PLATFORMS}
+service      = MusicApiService(circuit_breakers)
+state        = AppState(service)
 ui           = PlaylistManagerUI(page, state)
 auth_manager = AuthManager(page, service, state)
 
@@ -216,7 +219,7 @@ class AppState:
 # ui/main_ui.py
 class PlaylistManagerUI:
     def __init__(self, page, state: AppState):
-        state.subscribe(self.on_state_change)
+        state.add_listener(self.on_state_change)
 ```
 
 ### Ejemplo: Búsqueda de canción
