@@ -445,7 +445,7 @@ class MusicApiService:
             if not code or code == redirect_response:
                 return False
             token_info = await asyncio.to_thread(
-                oauth.get_access_token, code, as_dict=True, check_cache=False
+                oauth.get_access_token, code, check_cache=False
             )
             if token_info:
                 self._sp = spotipy.Spotify(auth_manager=oauth)

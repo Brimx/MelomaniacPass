@@ -1312,7 +1312,7 @@ class AuthManager:
         # Exchange code for token
         try:
             token_info = await asyncio.to_thread(
-                oauth.get_access_token, cb_server.auth_code, False, False
+                oauth.get_access_token, cb_server.auth_code, check_cache=False
             )
         except Exception as exc:  # pylint: disable=broad-exception-caught
             self.state_log_fn(f"[ERROR] OAuth Spotify — intercambio de token: {exc}")
