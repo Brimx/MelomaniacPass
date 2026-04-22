@@ -127,6 +127,7 @@ class CircuitBreaker:
         self.is_open: bool    = False
         self._until: float    = 0.0
         self._callbacks: list[Callable[[bool, int], None]] = []
+        self._reset_task: Optional[asyncio.Task] = None
 
     def subscribe(self, cb: Callable[[bool, int], None]) -> None:
         """
@@ -165,7 +166,10 @@ class CircuitBreaker:
         self.is_open = True
         self._until  = time.monotonic() + wait
         self._notify(True, wait)
-        asyncio.create_task(self._auto_reset(wait))
+        # Cancel any previous reset task before scheduling a new one
+        if self._reset_task and not self._reset_task.done():
+            self._reset_task.cancel()
+        self._reset_task = asyncio.create_task(self._auto_reset(wait))
 
     def check_or_raise(self) -> None:
         """
@@ -185,6 +189,18 @@ class CircuitBreaker:
         """
         if self.is_open:
             raise RateLimitError(self.platform, int(self.remaining))
+
+    def cancel(self) -> None:
+        """
+        Cancela la tarea de auto-reset si está pendiente.
+
+        Debe llamarse desde hard_cleanup() para garantizar que no queden
+        tareas asyncio huérfanas al cerrar la aplicación durante un cooldown.
+        """
+        if self._reset_task and not self._reset_task.done():
+            self._reset_task.cancel()
+            self._reset_task = None
+        self.is_open = False
 
     @property
     def remaining(self) -> float:
