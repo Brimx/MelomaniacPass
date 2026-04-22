@@ -132,7 +132,7 @@ class SpotifyRateLimiter:
                 peticiones (~1.5 req/s). Absorbe la latencia de red
                 calculando el tiempo real transcurrido desde el último call.
 
-      Nivel 2 — Sliding Window: ventana de 30s con límite de 40 requests.
+      Nivel 2 — Sliding Window: ventana de 30s con límite de 28 requests.
                 Si se alcanza el límite, pausa 20s forzados para dejar que
                 el token bucket de Spotify se recargue al 100%.
 
@@ -144,7 +144,7 @@ class SpotifyRateLimiter:
     """
 
     WINDOW_S     = 30
-    WINDOW_LIMIT = 40
+    WINDOW_LIMIT = 28
     WINDOW_SLEEP = 20.0
     PACE_MIN     = 0.5
     JITTER_MIN   = 0.1

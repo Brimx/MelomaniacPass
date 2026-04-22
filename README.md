@@ -194,9 +194,8 @@ Usuario obtiene tokens desde Apple Music Web
 ### Inicialización en `app.py`
 
 ```python
-circuit_breakers = {p: CircuitBreaker(p) for p in AppState.PLATFORMS}
-service      = MusicApiService(circuit_breakers)
-state        = AppState(service)
+service      = MusicApiService({})
+state        = AppState(service)        # crea circuit breakers internamente
 ui           = PlaylistManagerUI(page, state)
 auth_manager = AuthManager(page, service, state)
 
@@ -217,7 +216,7 @@ class AppState:
 # ui/main_ui.py
 class PlaylistManagerUI:
     def __init__(self, page, state: AppState):
-        state.add_listener(self.on_state_change)
+        state.subscribe(self.on_state_change)
 ```
 
 ### Ejemplo: Búsqueda de canción
