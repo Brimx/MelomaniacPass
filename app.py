@@ -21,6 +21,8 @@ Fecha: 2026
 
 import asyncio
 import os
+import shutil
+from pathlib import Path
 
 import flet as ft
 from dotenv import load_dotenv
@@ -31,6 +33,26 @@ from ui.main_ui import PlaylistManagerUI
 from auth_manager import AuthManager
 from utils.circuit_breaker import CircuitBreaker
 
+# ── Auto-generación de archivos de configuración ──────────────────────
+_BASE_DIR = Path(__file__).parent
+
+
+def _ensure_config_files() -> None:
+    """
+    Copia las plantillas .example a sus versiones reales si no existen.
+
+    Garantiza que .env y browser.json siempre estén presentes al arrancar,
+    evitando errores de lectura en load_dotenv() y en auth_manager.
+    """
+    for name in (".env", "browser.json"):
+        target   = _BASE_DIR / name
+        template = _BASE_DIR / f"{name}.example"
+        if not target.exists() and template.exists():
+            shutil.copy2(template, target)
+            print(f"[INIT] Creado {name} desde {name}.example")
+
+
+_ensure_config_files()
 load_dotenv()
 
 # ══════════════════════════════════════════════════════════════════════

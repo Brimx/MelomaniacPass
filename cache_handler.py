@@ -12,8 +12,8 @@ import json
 import logging
 import os
 
-# ── Compatibilidad con spotipy.oauth2.SpotifyOAuth ────────────────────
-# SpotifyOAuth ejecuta isinstance(cache_handler, spotipy.cache_handler.CacheHandler).
+# ── Compatibilidad con spotipy.oauth2.SpotifyPKCE ────────────────────
+# SpotifyPKCE ejecuta isinstance(cache_handler, spotipy.cache_handler.CacheHandler).
 # Si la clase base local no forma parte de esa cadena de herencia el check falla
 # con: "cache_handler must be a subclass of CacheHandler".
 # Solución: hacer que la clase base local extienda la de spotipy cuando está disponible.
@@ -38,7 +38,7 @@ class CacheHandler(_CacheHandlerBase):
     structure as the CacheHandler class.
 
     Inherits from spotipy.cache_handler.CacheHandler when spotipy is
-    available so that SpotifyOAuth's isinstance guard passes correctly.
+    available so that SpotifyPKCE's isinstance guard passes correctly.
     """
 
     def get_cached_token(self):

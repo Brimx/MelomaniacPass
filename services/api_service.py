@@ -377,20 +377,18 @@ class MusicApiService:
         if not HAS_SPOTIFY:
             return False
         try:
-            from spotipy.oauth2 import SpotifyOAuth          # pylint: disable=import-outside-toplevel
+            from spotipy.oauth2 import SpotifyPKCE           # pylint: disable=import-outside-toplevel
             from cache_handler import CacheFileHandler        # pylint: disable=import-outside-toplevel
 
-            client_id     = os.getenv("SPOTIFY_CLIENT_ID", "").strip()
-            client_secret = os.getenv("SPOTIFY_CLIENT_SECRET", "").strip()
-            redirect_uri  = os.getenv("SPOTIFY_REDIRECT_URI", "http://127.0.0.1:8888/callback").strip()
+            client_id    = os.getenv("SPOTIFY_CLIENT_ID", "").strip()
+            redirect_uri = os.getenv("SPOTIFY_REDIRECT_URI", "http://127.0.0.1:8080/callback").strip()
 
-            if not client_id or not client_secret:
+            if not client_id:
                 return False
 
             cache_handler = CacheFileHandler(cache_path=SPOTIFY_CACHE_PATH)
-            oauth = SpotifyOAuth(
+            oauth = SpotifyPKCE(
                 client_id=client_id,
-                client_secret=client_secret,
                 redirect_uri=redirect_uri,
                 scope=SPOTIFY_REQUIRED_SCOPES,
                 cache_handler=cache_handler,

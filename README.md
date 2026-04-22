@@ -15,8 +15,10 @@ melomaniacpass/
 ├── app.py                    # Entry point (~60 líneas)
 ├── auth_manager.py           # Autenticación (OAuth, tokens, wizard UI)
 ├── cache_handler.py          # Caché de tokens Spotify
-├── .env                      # Credenciales Spotify + Apple Music
-├── browser.json              # Headers de sesión YouTube Music
+├── .env.example              # Plantilla de credenciales (se auto-copia a .env)
+├── .env                      # Credenciales Spotify + Apple Music (auto-generado)
+├── browser.json.example      # Plantilla de headers YTM (se auto-copia a browser.json)
+├── browser.json              # Headers de sesión YouTube Music (auto-generado)
 │
 ├── core/
 │   ├── models.py             # Dataclasses: Track, SearchResult, LoadState, TransferState
@@ -88,12 +90,14 @@ app.py
 
 ```env
 SPOTIFY_CLIENT_ID='...'
-SPOTIFY_CLIENT_SECRET='...'
 SPOTIFY_REDIRECT_URI='http://127.0.0.1:8080/callback'
 
 APPLE_AUTH_BEARER='Bearer eyJhbGc...'
 APPLE_MUSIC_USER_TOKEN='0.AsH5+9...'
 ```
+
+> **Nota:** `.env` se genera automáticamente desde `.env.example` al arrancar si no existe.
+> Ya no se requiere `SPOTIFY_CLIENT_SECRET` (migrado a PKCE).
 
 **Quién accede y cómo:**
 
@@ -161,12 +165,12 @@ with open(BROWSER_JSON, 'r') as f:
 
 ### Flujo de Autenticación por Plataforma
 
-**Spotify (OAuth 2.0 Authorization Code Flow):**
+**Spotify (PKCE — Proof Key for Code Exchange):**
 ```
-.env (CLIENT_ID, CLIENT_SECRET)
+.env (CLIENT_ID, REDIRECT_URI — sin CLIENT_SECRET)
     → auth_manager abre navegador
     → servidor HTTP local en :8080 captura el callback
-    → intercambia code por access_token
+    → intercambia code + code_verifier por access_token
     → token guardado en cache_handler.py
     → services/api_service.py lo usa en cada request
 ```
