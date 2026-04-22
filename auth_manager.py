@@ -9,9 +9,8 @@ Credential contract by platform
 • YouTube Music  → editable via ConfigWizard (browser.json)
 • Apple Music    → editable via ConfigWizard (.env)
 • Spotify        → read-only in UI; credentials set directly in .env;
-                   authentication via PKCE (Proof Key for Code Exchange)
-                   — no CLIENT_SECRET required.
-                   (browser redirect to http://127.0.0.1:8080/callback)
+                   authentication via official OAuth Authorization Code
+                   Flow (browser redirect to http://127.0.0.1:8080/callback)
 
 browser.json  (YouTube Music)
     {
@@ -24,8 +23,9 @@ browser.json  (YouTube Music)
     }
 
 .env  (Spotify & Apple Music)
-    # SPOTIFY — PKCE (Public Client, sin CLIENT_SECRET)
+    # SPOTIFY — Authorization Code Flow (Official v5.0)
     SPOTIFY_CLIENT_ID="<App Client ID from Developer Dashboard>"
+    SPOTIFY_CLIENT_SECRET="<App Client Secret from Developer Dashboard>"
     SPOTIFY_REDIRECT_URI="http://127.0.0.1:8080/callback"
 
     # APPLE MUSIC
@@ -66,6 +66,7 @@ BROWSER_JSON_FIXED: dict[str, str] = {
 # ── Required .env variable names (exact, ordered) ──────────────────────
 ENV_KEYS_SPOTIFY = [
     "SPOTIFY_CLIENT_ID",
+    "SPOTIFY_CLIENT_SECRET",
     "SPOTIFY_REDIRECT_URI",
 ]
 ENV_KEYS_APPLE = [
@@ -141,7 +142,7 @@ def write_env_values(values: dict[str, str]) -> None:
     """
     if not ENV_FILE.exists():
         ENV_FILE.write_text(
-            "# SPOTIFY — PKCE (Public Client, sin CLIENT_SECRET)\n"
+            "# SPOTIFY — Authorization Code Flow (Official v5.0)\n"
             + "\n".join(f'{k}=""' for k in ENV_KEYS_SPOTIFY)
             + "\n\n# APPLE MUSIC\n"
             + "\n".join(f'{k}=""' for k in ENV_KEYS_APPLE)
@@ -211,33 +212,35 @@ def _preflight_youtube() -> PreFlightResult:
 
 def _preflight_spotify() -> PreFlightResult:
     """
-    Pre-flight de Spotify v5.0 — PKCE (Public Client).
+    Pre-flight de Spotify v5.0 — Authorization Code Flow oficial.
 
-    Verifica que CLIENT_ID está configurado y que el token cacheado
-    (.spotify_cache) es válido o puede refrescarse.
-    Si no hay cache, expired=True → el usuario inicia el flujo desde el Wizard.
+    Verifica que CLIENT_ID / CLIENT_SECRET están configurados y que el
+    token cacheado (.spotify_cache) es válido o puede refrescarse.
+    Si no hay cache, expired=True → AuthManager inicia el flujo OAuth.
     """
-    r            = PreFlightResult("Spotify")
-    env          = read_env_values()
-    client_id    = env.get("SPOTIFY_CLIENT_ID", "").strip()
-    redirect_uri = (
+    r             = PreFlightResult("Spotify")
+    env           = read_env_values()
+    client_id     = env.get("SPOTIFY_CLIENT_ID", "").strip()
+    client_secret = env.get("SPOTIFY_CLIENT_SECRET", "").strip()
+    redirect_uri  = (
         env.get("SPOTIFY_REDIRECT_URI", SPOTIFY_REDIRECT_URI).strip()
         or SPOTIFY_REDIRECT_URI
     )
 
-    if not client_id:
+    if not client_id or not client_secret:
         r.expired = True
         r.code    = AuthFailureCode.SPOTIFY_EXPIRED
-        r.error   = "SPOTIFY_CLIENT_ID no configurado en .env"
+        r.error   = "SPOTIFY_CLIENT_ID o SPOTIFY_CLIENT_SECRET no configurados en .env"
         return r
 
     try:
-        from spotipy.oauth2 import SpotifyPKCE           # pylint: disable=import-outside-toplevel
+        from spotipy.oauth2 import SpotifyOAuth          # pylint: disable=import-outside-toplevel
         from cache_handler import CacheFileHandler        # pylint: disable=import-outside-toplevel
 
         cache_handler = CacheFileHandler(cache_path=str(BASE_DIR / ".spotify_cache"))
-        oauth = SpotifyPKCE(
+        oauth = SpotifyOAuth(
             client_id=client_id,
+            client_secret=client_secret,
             redirect_uri=redirect_uri,
             scope="playlist-modify-public playlist-modify-private user-library-read",
             cache_handler=cache_handler,
@@ -340,7 +343,7 @@ def auth_failure_tooltip(r: PreFlightResult) -> str:
         return ""
     hints = {
         "YouTube Music": "browser.json: Cookie + Authorization (SAPISIDHASH)",
-        "Spotify":       ".env: SPOTIFY_CLIENT_ID + SPOTIFY_REDIRECT_URI (PKCE)",
+        "Spotify":       ".env: SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET / SPOTIFY_REDIRECT_URI (OAuth 2.0)",
         "Apple Music":   ".env: APPLE_AUTH_BEARER + APPLE_MUSIC_USER_TOKEN",
     }
     tag = f"[{r.code}] " if r.code else ""
@@ -924,7 +927,7 @@ class ConfigWizard:
         "Conectar con Spotify" button that starts the official OAuth
         Authorization Code Flow via the system browser.
 
-        No credential TextFields — CLIENT_ID / REDIRECT_URI
+        No credential TextFields — CLIENT_ID / CLIENT_SECRET / REDIRECT_URI
         must be configured directly in .env before pressing Connect.
         """
         # Status badge
@@ -1006,7 +1009,7 @@ class ConfigWizard:
 
         how_to = self._instructions_box([
             ("Configura .env antes de conectar",
-             f"SPOTIFY_CLIENT_ID y "
+             f"SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET y "
              f"SPOTIFY_REDIRECT_URI={SPOTIFY_REDIRECT_URI} deben estar en .env."),
             ("Pulsa «Conectar con Spotify»",
              "Se abrirá el navegador con la página de autorización de Spotify."),
@@ -1018,7 +1021,7 @@ class ConfigWizard:
         ])
 
         read_only_note = self._fixed_note(
-            "Las credenciales de Spotify (CLIENT_ID) se configuran "
+            "Las credenciales de Spotify (CLIENT_ID, CLIENT_SECRET) se configuran "
             "directamente en el archivo .env y no son editables desde esta interfaz."
         )
 
@@ -1232,43 +1235,47 @@ class AuthManager:
 
     async def start_spotify_oauth_flow(self) -> bool:
         """
-        Full PKCE Authorization Flow for Spotify.
+        Full Authorization Code Flow for Spotify.
 
-        1. Reads CLIENT_ID / REDIRECT_URI from .env.
+        1. Reads CLIENT_ID / CLIENT_SECRET / REDIRECT_URI from .env.
         2. Opens the system browser to Spotify's authorization page.
         3. Starts _OAuthCallbackServer on 127.0.0.1:8080.
         4. Awaits callback (max SPOTIFY_OAUTH_TIMEOUT seconds).
         5. Exchanges code for token → saved in .spotify_cache.
         6. Returns True on success.
         """
-        env          = read_env_values()
-        client_id    = env.get("SPOTIFY_CLIENT_ID", "").strip()
-        redirect_uri = (
+        env           = read_env_values()
+        client_id     = env.get("SPOTIFY_CLIENT_ID", "").strip()
+        client_secret = env.get("SPOTIFY_CLIENT_SECRET", "").strip()
+        redirect_uri  = (
             env.get("SPOTIFY_REDIRECT_URI", SPOTIFY_REDIRECT_URI).strip()
             or SPOTIFY_REDIRECT_URI
         )
 
-        if not client_id:
+        if not client_id or not client_secret:
             self.state_log_fn(
-                "[ERROR] PKCE Spotify: SPOTIFY_CLIENT_ID no configurado en .env"
+                "[ERROR] OAuth Spotify: SPOTIFY_CLIENT_ID o SPOTIFY_CLIENT_SECRET "
+                "no configurados en .env"
             )
             return False
 
         try:
-            from spotipy.oauth2 import SpotifyPKCE           # pylint: disable=import-outside-toplevel
+            from spotipy.oauth2 import SpotifyOAuth          # pylint: disable=import-outside-toplevel
             from cache_handler import CacheFileHandler        # pylint: disable=import-outside-toplevel
         except ImportError as exc:
-            self.state_log_fn(f"[ERROR] PKCE Spotify — import: {exc}")
+            self.state_log_fn(f"[ERROR] OAuth Spotify — import: {exc}")
             return False
 
         cache_path    = str(BASE_DIR / ".spotify_cache")
         cache_handler = CacheFileHandler(cache_path=cache_path)
-        oauth = SpotifyPKCE(
+        oauth = SpotifyOAuth(
             client_id=client_id,
+            client_secret=client_secret,
             redirect_uri=redirect_uri,
             scope="playlist-modify-public playlist-modify-private user-library-read",
             cache_handler=cache_handler,
             open_browser=False,
+            show_dialog=False,
         )
 
         # Skip the flow if a valid token is already cached
@@ -1312,7 +1319,7 @@ class AuthManager:
         # Exchange code for token
         try:
             token_info = await asyncio.to_thread(
-                oauth.get_access_token, cb_server.auth_code, check_cache=False
+                oauth.get_access_token, cb_server.auth_code, False, False
             )
         except Exception as exc:  # pylint: disable=broad-exception-caught
             self.state_log_fn(f"[ERROR] OAuth Spotify — intercambio de token: {exc}")
@@ -1469,9 +1476,9 @@ class AuthManager:
     # ── Deprecated stub ────────────────────────────────────────────────
 
     def get_spotify_web_token(self) -> Optional[str]:
-        """DEPRECATED in v5.0 — use SpotifyPKCE + CacheFileHandler."""
+        """DEPRECATED in v5.0 — use SpotifyOAuth + CacheFileHandler."""
         self.state_log_fn(
             "[WARN] get_spotify_web_token() está deprecado en v5.0. "
-            "Usa SpotifyPKCE + CacheFileHandler (MusicApiService._sync_init_spotify)."
+            "Usa SpotifyOAuth + CacheFileHandler (MusicApiService._sync_init_spotify)."
         )
         return None
