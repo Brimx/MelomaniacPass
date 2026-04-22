@@ -193,12 +193,14 @@ async def main(page: ft.Page) -> None:
             Protocolo de limpieza profunda de recursos del sistema.
             
             Implementa una estrategia de cierre ordenado que garantiza:
-            1. Detención de la instancia de UI (app_inst)
-            2. Cancelación de tareas de escaneo lazy (state_inst)
-            3. Cancelación de tareas de recarga de autenticación (auth_inst)
-            4. Cancelación de todas las tareas asyncio pendientes
-            5. Recolección de basura forzada (gc.collect)
-            6. Limpieza de sesiones HTTP (service_inst)
+            1. Cancelación de circuit breakers (tareas de auto-reset)
+            2. Detención de la instancia de UI (app_inst)
+            3. Cancelación de tareas de escaneo lazy (state_inst)
+            4. Cancelación de tareas de recarga de autenticación (auth_inst)
+            5. Cancelación de todas las tareas asyncio pendientes
+            6. Recolección de basura forzada (gc.collect)
+            7. Limpieza de sesiones HTTP (service_inst)
+            8. os._exit(0) como último recurso si threads bloqueados siguen vivos
             
             Args:
                 app_inst: Instancia de PlaylistManagerUI.
@@ -217,6 +219,14 @@ async def main(page: ft.Page) -> None:
                 return
             _shutdown_once[0] = True
             
+            # Cancelar circuit breakers — evita tareas _auto_reset huérfanas
+            # cuando se cierra durante un cooldown de rate-limit
+            try:
+                for cb in state_inst.cb.values():
+                    cb.cancel()
+            except Exception:  # pylint: disable=broad-exception-caught
+                pass
+
             # Detener instancia de UI
             try:
                 app_inst.stop()
@@ -259,6 +269,17 @@ async def main(page: ft.Page) -> None:
                 await asyncio.to_thread(service_inst.cleanup_sessions)
             
             shutdown_event.set()
+
+            # Último recurso: si asyncio.to_thread tiene threads bloqueados
+            # (p. ej. búsquedas en curso), no son cancelables — forzar salida.
+            def _force_exit() -> None:
+                import time as _time
+                _time.sleep(3)
+                os._exit(0)
+
+            import threading as _threading
+            _t = _threading.Thread(target=_force_exit, daemon=True, name="force-exit")
+            _t.start()
 
         def _on_close(_) -> None:
             """
