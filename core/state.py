@@ -59,6 +59,7 @@ from core.models import Track, SearchResult, LoadState, TransferState
 from utils.circuit_breaker import CircuitBreaker, RateLimitError, SpotifyBanException
 from engine.normalizer import clean_metadata
 from engine.match import _duration_to_seconds, FUZZY_REVISION_THRESHOLD, FUZZY_IDEAL
+from engine.organizer import sort_tracks, split_tracks
 
 
 def _failure_reason_from_exc(exc: BaseException) -> str:
@@ -264,6 +265,8 @@ class AppState:
         self.playlist_name: str         = "Cargar una playlist"
         self.tracks:        list[Track] = []
         self.filtered:      list[Track] = []
+        self.segments:      dict[str, list[Track]] = {}
+        self.active_segment_key: Optional[str]     = None
         self.load_state:    LoadState   = LoadState.IDLE
         self.load_error:    str         = ""
 
@@ -376,7 +379,8 @@ class AppState:
 
     @property
     def display_tracks(self) -> list[Track]:
-        return self.filtered if self.search_query else self.tracks
+        base_list = self.segments[self.active_segment_key] if self.active_segment_key and self.active_segment_key in self.segments else self.tracks
+        return self.filtered if self.search_query else base_list
 
     # ── Actions ────────────────────────────────────────────────────────
 
@@ -442,6 +446,8 @@ class AppState:
         self.playlist_name = "Cargar una playlist"
         self.tracks        = []
         self.filtered      = []
+        self.segments      = {}
+        self.active_segment_key = None
         self.search_query  = ""
         self.load_state    = LoadState.IDLE
         self.load_error    = ""
@@ -731,15 +737,42 @@ class AppState:
 
     def apply_search(self, query: str) -> None:
         self.search_query = query
+        base_list = self.segments[self.active_segment_key] if self.active_segment_key and self.active_segment_key in self.segments else self.tracks
         if not query:
             self.filtered = []
         else:
             q = query.lower()
             self.filtered = [
-                t for t in self.tracks
+                t for t in base_list
                 if q in t.name.lower() or q in t.artist.lower() or q in t.album.lower()
             ]
         self.notify()
+
+    def organize_sort(self, keys: list[str], reverse: bool = False) -> None:
+        self.tracks = sort_tracks(self.tracks, keys, reverse)
+        if self.segments:
+            for k in self.segments:
+                self.segments[k] = sort_tracks(self.segments[k], keys, reverse)
+        self.apply_search(self.search_query)  # Re-aplica filtro y notifica
+
+    def organize_split(self, key: str) -> None:
+        self.segments = split_tracks(self.tracks, key)
+        if self.segments:
+            # Selecciona el primer segmento por defecto (ordenado alfabéticamente)
+            self.active_segment_key = sorted(list(self.segments.keys()))[0]
+        else:
+            self.active_segment_key = None
+        self.apply_search(self.search_query)
+
+    def clear_split(self) -> None:
+        self.segments = {}
+        self.active_segment_key = None
+        self.apply_search(self.search_query)
+
+    def set_active_segment(self, key: str) -> None:
+        if key in self.segments:
+            self.active_segment_key = key
+            self.apply_search(self.search_query)
 
     def set_source(self, val: str) -> None:
         self.source = val

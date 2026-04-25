@@ -1,5 +1,6 @@
 # Entorno de desarrollo
 .vscode/
+.kiro/
 
 # Archivos de sistema y Python
 __pycache__/

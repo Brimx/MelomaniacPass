@@ -543,28 +543,16 @@ class ConfigWizard:
     # ── Dialog lifecycle ───────────────────────────────────────────────
 
     def _show_dialog(self, dlg: ft.AlertDialog) -> None:
-        self.page.show_dialog(dlg)
+        self.page.dialog = dlg
+        dlg.open = True
+        self.page.update()
 
     def _dismiss_dialog(self, dlg: ft.AlertDialog) -> None:
         if dlg is None:
             return
         try:
-            ds = getattr(self.page, "_dialogs", None)
-            if ds is not None and dlg in ds.controls:
-                top_open = next(
-                    (d for d in reversed(ds.controls) if getattr(d, "open", False)),
-                    None,
-                )
-                if top_open is dlg:
-                    self.page.pop_dialog()
-                else:
-                    dlg.open = False
-                    dlg.update()
-                    self.page.update()
-            else:
-                dlg.open = False
-                dlg.update()
-                self.page.update()
+            dlg.open = False
+            self.page.update()
         except Exception as e:  # pylint: disable=broad-exception-caught
             print(f"[ConfigWizard] No se pudo cerrar el diálogo: {e}")
 
