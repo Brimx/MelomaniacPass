@@ -1,4 +1,4 @@
-# 🎵 MelomaniacPass v5.0
+# MelomaniacPass v5.0
 
 Aplicación de escritorio para transferir playlists entre **Spotify**, **YouTube Music** y **Apple Music** con matching inteligente de canciones.
 
@@ -12,32 +12,33 @@ python app.py
 
 ```
 melomaniacpass/
-├── app.py                    # Entry point (~60 líneas)
-├── auth_manager.py           # Autenticación (OAuth, tokens, wizard UI)
-├── cache_handler.py          # Caché de tokens Spotify
+├── app.py                    # Entry point (~200 líneas)
+├── auth_manager.py           # Autenticación (OAuth, tokens, wizard UI, pre-flight)
+├── cache_handler.py          # Caché de tokens Spotify (CacheFileHandler + variantes)
 ├── .env                      # Credenciales Spotify + Apple Music
 ├── browser.json              # Headers de sesión YouTube Music
 │
 ├── core/
 │   ├── models.py             # Dataclasses: Track, SearchResult, LoadState, TransferState
-│   └── state.py              # AppState — estado global de la app
+│   └── state.py              # AppState — ViewModel central (patrón BLoC)
 │
 ├── services/
-│   └── api_service.py        # MusicApiService — Spotify + YTM + Apple unificado
+│   └── api_service.py        # MusicApiService — Facade unificado Spotify + YTM + Apple
 │
 ├── engine/
 │   ├── normalizer.py         # Limpieza y normalización de metadatos (Unicode, regex)
-│   ├── match.py              # Matching fuzzy: validar_match, scoring, _yt_select_best
-│   └── parsers.py            # Parsers de playlists locales (CSV, iTunes XML, M3U)
+│   ├── match.py              # Sistema Hunter Recovery: validar_match, scoring, score_spotify_match
+│   ├── parsers.py            # Parsers de playlists locales (CSV, M3U, XSPF, WPL, iTunes XML)
+│   └── organizer.py          # Ordenamiento y segmentación de listas en memoria
 │
 ├── ui/
 │   ├── main_ui.py            # PlaylistManagerUI — interfaz principal
 │   ├── song_row.py           # SongRow, SkeletonRow
-│   ├── telemetry.py          # TelemetryDrawer — panel de monitoreo
+│   ├── telemetry.py          # TelemetryDrawer — panel Monitor / Consola / Post-Mortem
 │   └── widgets.py            # Botones y componentes reutilizables
 │
 └── utils/
-    └── circuit_breaker.py    # CircuitBreaker + RateLimitError
+    └── circuit_breaker.py    # CircuitBreaker + RateLimitError + SpotifyBanException
 ```
 
 ---
@@ -49,7 +50,7 @@ auth_manager.py + cache_handler.py
         ↓
 utils/circuit_breaker.py
         ↓
-engine/  (normalizer → match → parsers)
+engine/  (normalizer → match → parsers → organizer)
         ↓
 core/models.py
         ↓
@@ -69,16 +70,19 @@ app.py
 | Librería | Módulos que la usan | Propósito |
 |---|---|---|
 | `flet` | app.py, ui/*, auth_manager.py | Framework de UI |
-| `asyncio` | app.py, ui/main_ui.py, services/, ui/song_row.py | Operaciones asíncronas |
+| `asyncio` | app.py, ui/main_ui.py, services/, core/state.py | Operaciones asíncronas |
 | `requests` | services/api_service.py, auth_manager.py | Llamadas HTTP a APIs |
-| `spotipy` | cache_handler.py, auth_manager.py | SDK oficial de Spotify |
+| `spotipy` | cache_handler.py, auth_manager.py, services/ | SDK oficial de Spotify |
+| `ytmusicapi` | services/api_service.py | SDK de YouTube Music |
 | `python-dotenv` | app.py, services/api_service.py, auth_manager.py | Lectura/escritura de `.env` |
-| `re` + `unicodedata` | engine/normalizer.py, engine/parsers.py | Normalización de texto |
+| `rapidfuzz` | engine/match.py, engine/normalizer.py | Matching fuzzy de alto rendimiento |
+| `re` + `unicodedata` | engine/normalizer.py, engine/parsers.py, engine/match.py | Normalización de texto |
 | `csv` | engine/parsers.py | Parseo de playlists CSV |
-| `xml.etree.ElementTree` | engine/parsers.py | Parseo de iTunes XML |
+| `xml.etree.ElementTree` | engine/parsers.py | Parseo de iTunes XML, XSPF, WPL |
 | `json` | auth_manager.py, cache_handler.py | Lectura/escritura de `browser.json` |
 | `pathlib` | auth_manager.py | Rutas de archivos |
 | `threading` + `webbrowser` | auth_manager.py | Servidor OAuth local para Spotify |
+| `collections.defaultdict` | engine/organizer.py | Agrupación de segmentos |
 
 ---
 
@@ -124,12 +128,12 @@ load_dotenv()
 
 ```json
 {
-    "Authorization": "SAPISIDHASH ...",
-    "Cookie": "...",
     "Accept": "*/*",
+    "Authorization": "SAPISIDHASH ...",
     "Content-Type": "application/json",
     "X-Goog-AuthUser": "0",
-    "x-origin": "https://music.youtube.com"
+    "x-origin": "https://music.youtube.com",
+    "Cookie": "..."
 }
 ```
 
@@ -147,14 +151,12 @@ with open(BROWSER_JSON, 'r', encoding='utf-8') as f:
     headers = json.load(f)
 
 # escritura desde ConfigWizard
-with open(BROWSER_JSON, 'w', encoding='utf-8') as f:
-    json.dump(headers_dict, f, indent=4)
+write_browser_json(authorization="SAPISIDHASH ...", cookie="...")
 
 # services/api_service.py — importa la ruta desde auth_manager
 from auth_manager import BROWSER_JSON
 
-with open(BROWSER_JSON, 'r') as f:
-    self.ytm_headers = json.load(f)
+self._ytm = YTMusic(auth=str(BROWSER_JSON), requests_session=self._yt_http_session)
 ```
 
 ---
@@ -164,29 +166,38 @@ with open(BROWSER_JSON, 'r') as f:
 **Spotify (OAuth 2.0 Authorization Code Flow):**
 ```
 .env (CLIENT_ID, CLIENT_SECRET)
-    → App arranca sin bloquear la UI (Lazy Auth)
-    → Usuario hace clic en "Conectar" en el Config Wizard
-    → auth_manager abre navegador
-    → servidor HTTP local en :8080 captura el callback
-    → intercambia code por access_token
-    → token guardado en .spotify_cache (vía cache_handler)
-    → services/api_service.py lo usa en cada request
+    → auth_manager genera URL de autorización
+    → usuario abre navegador y autoriza
+    → pega la URL de redirección en el diálogo de la app
+    → service.handle_spotify_redirect() intercambia code por access_token
+    → token guardado en .spotify_cache via CacheFileHandler
+    → services/api_service.py lo usa en cada request via spotipy
 ```
 
 **YouTube Music (Headers de sesión):**
 ```
-Usuario copia headers del navegador
-    → auth_manager los guarda en browser.json
-    → services/api_service.py los carga al iniciar
+Usuario copia headers del navegador (F12 → Network)
+    → ConfigWizard los guarda en browser.json via write_browser_json()
+    → services/api_service.py los carga al iniciar con YTMusic(auth=...)
     → se incluyen en cada request a la API
 ```
 
 **Apple Music (Bearer + User Token):**
 ```
 Usuario obtiene tokens desde Apple Music Web
-    → auth_manager los guarda en .env con set_key()
+    → ConfigWizard los guarda en .env con set_key()
     → services/api_service.py los lee con os.getenv()
     → se incluyen en headers de cada request
+```
+
+**Pre-flight checks (auth_manager.py):**
+```
+Al iniciar la app → run_preflight() ejecuta en paralelo:
+    _preflight_youtube()  → valida browser.json + llamada real a YTMusic
+    _preflight_spotify()  → valida .spotify_cache + GET /v1/me
+    _preflight_apple()    → valida .env + GET /v1/me/storefront
+    → resultados → AuthManager.ingest_preflight_results()
+    → iconos de estado en la UI actualizados
 ```
 
 ---
@@ -219,30 +230,88 @@ class AppState:
 # ui/main_ui.py
 class PlaylistManagerUI:
     def __init__(self, page, state: AppState):
-        state.add_listener(self.on_state_change)
+        state.subscribe(self._on_state_changed)
+        for platform, cb in state.cb.items():
+            cb.subscribe(lambda is_open, rem, p=platform: self._on_circuit_change(p, is_open, rem))
 ```
 
 ### Ejemplo: Búsqueda de canción
 
 ```
-ui/main_ui.py         → state.search_spotify(query)
-core/state.py         → service.search_spotify(query)
-services/api_service  → engine/normalizer.build_search_query()
-                      → request a Spotify API
-                      → retorna list[SearchResult]
-core/state.py         → actualiza self.search_results → notify()
-ui/main_ui.py         → on_state_change() → actualiza UI
+ui/main_ui.py         → state.load_playlist(playlist_id)
+core/state.py         → service.fetch_playlist(source, id, progress_cb)
+services/api_service  → request a plataforma origen
+                      → retorna (name, list[Track])
+core/state.py         → self.tracks = tracks → notify()
+ui/main_ui.py         → _on_state_changed() → actualiza lista
 ```
 
 ### Ejemplo: Transferencia de playlist
 
 ```
-ui/main_ui.py         → state.start_transfer(platform)
-core/state.py         → para cada Track:
+ui/main_ui.py         → state.transfer_playlist()
+core/state.py         → para cada Track seleccionado (concurrente):
 engine/normalizer     →   clean_metadata(title, artist)
-services/api_service  →   search_[platform](query)
-engine/match.py       →   validar_match(original, resultado)
-services/api_service  →   add_to_playlist(track_id)  ← si match válido
-core/state.py         →   TransferState actualizado → notify()
-ui/main_ui.py         → actualiza progreso en tiempo real
+services/api_service  →   search_with_fallback(platform, name, artist)
+engine/match.py       →   validar_match() + score_spotify_match()
+core/state.py         →   SearchResult → track_id o needs_review
+services/api_service  →   create_playlist(platform, name, ids)
+core/state.py         →   TransferState.DONE → notify()
+ui/main_ui.py         → _on_state_changed() → muestra post-mortem
 ```
+
+### Ejemplo: Organizar / Dividir lista
+
+```
+ui/main_ui.py         → state.organize_sort(["artist"], reverse=False)
+core/state.py         → engine/organizer.sort_tracks(tracks, keys, reverse)
+                      → self.tracks = sorted_tracks → notify()
+
+ui/main_ui.py         → state.organize_split("artist")
+core/state.py         → engine/organizer.split_tracks(tracks, "artist")
+                      → self.segments = {"Queen": [...], "Beatles": [...]}
+                      → notify()
+```
+
+---
+
+## Módulos Clave — Resumen de Responsabilidades
+
+### `engine/organizer.py` (nuevo en v5.0)
+Transformaciones de datos en memoria sin I/O:
+- `sort_tracks(tracks, keys, reverse)` — ordena por artista, álbum, título, duración o plataforma
+- `split_tracks(tracks, key)` — segmenta la lista maestra en grupos por atributo
+
+### `engine/match.py` — Sistema Hunter Recovery
+- `validar_match()` — validación multi-capa L0→L3 para YouTube Music
+- `_fuzzy_scores_triple()` — scores desglosados: combinado, título, artista
+- `score_spotify_match()` — scoring base-100 para Spotify (reemplaza `popularity` eliminado en 2026)
+- `_yt_select_best()` — selección del mejor resultado con tie-breaker por duración
+
+### `utils/circuit_breaker.py`
+- `CircuitBreaker` — patrón circuit breaker con auto-reset y notificaciones a UI
+- `RateLimitError` — excepción para HTTP 429 con tiempo de espera
+- `SpotifyBanException` — excepción fatal para ban activo de Spotify (aborta transferencia)
+
+### `services/api_service.py` — SpotifyRateLimiter
+Además del `CircuitBreaker` global, el servicio implementa un `SpotifyRateLimiter` interno con 3 niveles:
+1. Token bucket (nivel 1) — limita requests por segundo
+2. Sliding window (nivel 2) — limita requests por minuto
+3. Kill switch (nivel 3) — lanza `SpotifyBanException` si Spotify devuelve 429 a pesar de los niveles anteriores
+
+---
+
+## Métricas de Refactorización
+
+| | Antes | Después |
+|---|---|---|
+| Archivos | 1 monolito | 16 módulos |
+| Líneas entry point | ~5000 | ~200 |
+| Tamaño entry point | 218 KB | ~8 KB |
+| Módulos de engine | 0 | 4 (normalizer, match, parsers, organizer) |
+
+---
+
+## Respaldo
+
+El monolito original está en `v. 0.1/refactor_backup/app.py` (218 KB).
